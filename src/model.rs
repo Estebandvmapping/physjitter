@@ -7,17 +7,45 @@ use serde::{Deserialize, Serialize};
 
 use crate::Jitter;
 
+/// Minimum standard deviation threshold for human-like jitter.
+/// Below this value, the sequence is flagged as automation.
+const MIN_STD_DEV_THRESHOLD: f64 = 50.0;
+
+/// Confidence penalty per detected anomaly.
+const CONFIDENCE_PENALTY_PER_ANOMALY: f64 = 0.25;
+
+/// Minimum confidence threshold for human classification.
+const MIN_HUMAN_CONFIDENCE: f64 = 0.5;
+
+/// Threshold ratio for repeating pattern detection (80%).
+const REPEATING_PATTERN_THRESHOLD: f64 = 0.8;
+
+/// Minimum checks required for pattern detection.
+const MIN_PATTERN_CHECKS: usize = 2;
+
+/// Minimum standard deviation threshold for human-like IKI values.
+/// IKI values have higher natural variance than jitter, so this threshold is higher.
+const MIN_IKI_STD_DEV_THRESHOLD: f64 = 5000.0;
+
 /// Statistical model for validating jitter sequences against human typing patterns.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HumanModel {
-    /// Minimum inter-key interval in microseconds.
+    /// Minimum inter-key interval in microseconds (for IKI validation, not jitter).
+    /// Used by `validate_iki()` to check actual keystroke timing data.
     pub iki_min_us: u32,
-    /// Maximum reasonable inter-key interval in microseconds.
+    /// Maximum inter-key interval in microseconds (for IKI validation, not jitter).
+    /// Used by `validate_iki()` to check actual keystroke timing data.
     pub iki_max_us: u32,
     /// Mean inter-key interval in microseconds (Aalto: ~200ms = 200,000μs).
+    /// Used by `validate_iki()` for statistical analysis.
     pub iki_mean_us: u32,
     /// Standard deviation of IKI in microseconds.
+    /// Used by `validate_iki()` for statistical analysis.
     pub iki_std_us: u32,
+    /// Minimum jitter delay in microseconds.
+    pub jitter_min_us: u32,
+    /// Maximum jitter delay in microseconds.
+    pub jitter_max_us: u32,
     /// Minimum sequence length for statistical validation.
     pub min_sequence_length: usize,
     /// Maximum allowed perfect-timing ratio (detects automation).
@@ -32,6 +60,8 @@ impl Default for HumanModel {
             iki_max_us: 2_000_000,    // 2s maximum (thinking pause)
             iki_mean_us: 200_000,     // 200ms mean
             iki_std_us: 80_000,       // 80ms std dev
+            jitter_min_us: 500,       // Matches compute_jitter output minimum
+            jitter_max_us: 3000,      // Matches compute_jitter output maximum
             min_sequence_length: 20,  // Minimum keystrokes for validation
             max_perfect_ratio: 0.05,  // Max 5% can be "perfect" timing
         }
@@ -93,6 +123,22 @@ pub struct SequenceStats {
 }
 
 impl HumanModel {
+    /// Load baseline model from embedded JSON (Aalto 136M keystroke dataset).
+    pub fn baseline() -> Self {
+        const BASELINE: &str = include_str!("baseline.json");
+        serde_json::from_str(BASELINE).expect("embedded baseline is valid")
+    }
+
+    /// Load model from JSON string.
+    pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
+        serde_json::from_str(json)
+    }
+
+    /// Serialize model to JSON string.
+    pub fn to_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(self)
+    }
+
     /// Validate a sequence of jitter values against human typing patterns.
     pub fn validate(&self, jitters: &[Jitter]) -> ValidationResult {
         let mut anomalies = Vec::new();
@@ -117,7 +163,7 @@ impl HumanModel {
         let stats = self.compute_stats(jitters);
 
         // Check for low variance (automation signal)
-        if stats.std_dev < 50.0 {
+        if stats.std_dev < MIN_STD_DEV_THRESHOLD {
             anomalies.push(Anomaly {
                 kind: AnomalyKind::LowVariance,
                 position: 0,
@@ -145,12 +191,33 @@ impl HumanModel {
             });
         }
 
+        // Check for out-of-range jitter values (summarize to avoid flooding)
+        let out_of_range: Vec<usize> = jitters
+            .iter()
+            .enumerate()
+            .filter(|(_, &j)| j < self.jitter_min_us || j > self.jitter_max_us)
+            .map(|(i, _)| i)
+            .collect();
+
+        if !out_of_range.is_empty() {
+            anomalies.push(Anomaly {
+                kind: AnomalyKind::OutOfRange,
+                position: out_of_range[0],
+                detail: format!(
+                    "{} jitter values outside [{}, {}]μs range",
+                    out_of_range.len(),
+                    self.jitter_min_us,
+                    self.jitter_max_us
+                ),
+            });
+        }
+
         // Calculate confidence based on anomalies
-        let base_confidence = 1.0 - (anomalies.len() as f64 * 0.25);
-        let confidence = base_confidence.max(0.0).min(1.0);
+        let base_confidence = 1.0 - (anomalies.len() as f64 * CONFIDENCE_PENALTY_PER_ANOMALY);
+        let confidence = base_confidence.clamp(0.0, 1.0);
 
         ValidationResult {
-            is_human: anomalies.is_empty() && confidence > 0.5,
+            is_human: anomalies.is_empty() && confidence > MIN_HUMAN_CONFIDENCE,
             confidence,
             anomalies,
             stats,
@@ -229,12 +296,119 @@ impl HumanModel {
             }
 
             // If >80% match the pattern, it's suspicious
-            if checks > 2 && matches as f64 / checks as f64 > 0.8 {
+            if checks > MIN_PATTERN_CHECKS && matches as f64 / checks as f64 > REPEATING_PATTERN_THRESHOLD {
                 return Some(pattern_len);
             }
         }
 
         None
+    }
+
+    /// Validate actual inter-key intervals (not jitter values).
+    ///
+    /// Use this when you have real keystroke timing data, not computed jitter delays.
+    /// IKI values are typically in the range of 30ms-2000ms for human typing.
+    ///
+    /// # Arguments
+    ///
+    /// * `intervals_us` - Slice of inter-key intervals in microseconds
+    ///
+    /// # Returns
+    ///
+    /// A `ValidationResult` indicating whether the timing appears human-generated.
+    pub fn validate_iki(&self, intervals_us: &[u64]) -> ValidationResult {
+        let mut anomalies = Vec::new();
+
+        if intervals_us.len() < self.min_sequence_length {
+            return ValidationResult {
+                is_human: false,
+                confidence: 0.0,
+                anomalies: vec![Anomaly {
+                    kind: AnomalyKind::DistributionMismatch,
+                    position: 0,
+                    detail: format!(
+                        "Sequence too short: {} < {}",
+                        intervals_us.len(),
+                        self.min_sequence_length
+                    ),
+                }],
+                stats: SequenceStats {
+                    count: intervals_us.len(),
+                    mean: 0.0,
+                    std_dev: 0.0,
+                    min: 0,
+                    max: 0,
+                },
+            };
+        }
+
+        // Check for out-of-range IKI values
+        let out_of_range: Vec<usize> = intervals_us
+            .iter()
+            .enumerate()
+            .filter(|(_, &iki)| iki < self.iki_min_us as u64 || iki > self.iki_max_us as u64)
+            .map(|(i, _)| i)
+            .collect();
+
+        if !out_of_range.is_empty() {
+            anomalies.push(Anomaly {
+                kind: AnomalyKind::OutOfRange,
+                position: out_of_range[0],
+                detail: format!(
+                    "{} IKI values outside [{}, {}]μs range",
+                    out_of_range.len(),
+                    self.iki_min_us,
+                    self.iki_max_us
+                ),
+            });
+        }
+
+        // Compute stats (convert to Jitter/u32 for stats, capping at u32::MAX)
+        let capped: Vec<u32> = intervals_us
+            .iter()
+            .map(|&v| v.min(u32::MAX as u64) as u32)
+            .collect();
+        let stats = self.compute_stats(&capped);
+
+        // Check for low variance (automation signal)
+        // IKI values have higher natural variance than jitter, so use a higher threshold
+        if stats.std_dev < MIN_IKI_STD_DEV_THRESHOLD {
+            anomalies.push(Anomaly {
+                kind: AnomalyKind::LowVariance,
+                position: 0,
+                detail: format!("IKI variance too low: std_dev={:.2}μs", stats.std_dev),
+            });
+        }
+
+        // Check for perfect timing (exact same values)
+        let perfect_count = self.count_perfect_timing(&capped);
+        let perfect_ratio = perfect_count as f64 / capped.len() as f64;
+        if perfect_ratio > self.max_perfect_ratio {
+            anomalies.push(Anomaly {
+                kind: AnomalyKind::PerfectTiming,
+                position: 0,
+                detail: format!("Too many perfect IKI timings: {:.1}%", perfect_ratio * 100.0),
+            });
+        }
+
+        // Check for repeating patterns
+        if let Some(pattern_len) = self.detect_repeating_pattern(&capped) {
+            anomalies.push(Anomaly {
+                kind: AnomalyKind::RepeatingPattern,
+                position: 0,
+                detail: format!("Repeating IKI pattern of length {}", pattern_len),
+            });
+        }
+
+        let base_confidence = 1.0 - (anomalies.len() as f64 * CONFIDENCE_PENALTY_PER_ANOMALY);
+        let confidence = base_confidence.clamp(0.0, 1.0);
+
+        ValidationResult {
+            is_human: anomalies.is_empty() && confidence > MIN_HUMAN_CONFIDENCE,
+            confidence,
+            anomalies,
+            stats,
+        }
     }
 }
 
@@ -278,5 +452,91 @@ mod tests {
 
         let result = model.validate(&pattern_jitters);
         assert!(result.anomalies.iter().any(|a| matches!(a.kind, AnomalyKind::RepeatingPattern)));
+    }
+
+    #[test]
+    fn test_baseline_loading() {
+        let model = HumanModel::baseline();
+        assert_eq!(model.iki_mean_us, 200_000);
+        assert_eq!(model.jitter_min_us, 500);
+    }
+
+    #[test]
+    fn test_iki_validation_human() {
+        let model = HumanModel::default();
+
+        // Simulate human-like IKI values (varied values in 30ms-2000ms range)
+        let human_iki: Vec<u64> = (0..50)
+            .map(|i| 50_000 + ((i * 37_123) % 500_000) as u64)
+            .collect();
+
+        let result = model.validate_iki(&human_iki);
+        assert!(result.confidence > 0.5);
+        assert!(result.is_human);
+    }
+
+    #[test]
+    fn test_iki_validation_automation() {
+        let model = HumanModel::default();
+
+        // Constant IKI values (automation signal)
+        let automated_iki: Vec<u64> = vec![100_000; 50];
+
+        let result = model.validate_iki(&automated_iki);
+        assert!(!result.is_human);
+        assert!(result.anomalies.iter().any(|a| matches!(a.kind, AnomalyKind::LowVariance)));
+    }
+
+    #[test]
+    fn test_iki_validation_out_of_range() {
+        let model = HumanModel::default();
+
+        // IKI values below minimum (too fast - automation)
+        let fast_iki: Vec<u64> = (0..50)
+            .map(|i| 10_000 + ((i * 1_000) % 15_000) as u64) // 10-25ms, below 30ms minimum
+            .collect();
+
+        let result = model.validate_iki(&fast_iki);
+        assert!(!result.is_human);
+        assert!(result.anomalies.iter().any(|a| matches!(a.kind, AnomalyKind::OutOfRange)));
+    }
+
+    #[test]
+    fn test_iki_validation_too_short() {
+        let model = HumanModel::default();
+
+        // Sequence too short
+        let short_iki: Vec<u64> = vec![100_000, 150_000, 200_000];
+
+        let result = model.validate_iki(&short_iki);
+        assert!(!result.is_human);
+        assert_eq!(result.confidence, 0.0);
+        assert!(result.anomalies.iter().any(|a| matches!(a.kind, AnomalyKind::DistributionMismatch)));
+    }
+
+    #[test]
+    fn test_empty_jitter_sequence() {
+        let model = HumanModel::default();
+        let result = model.validate(&[]);
+        assert!(!result.is_human);
+        assert_eq!(result.stats.count, 0);
+    }
+
+    #[test]
+    fn test_single_jitter_value() {
+        let model = HumanModel::default();
+        let result = model.validate(&[1500]);
+        assert!(!result.is_human); // Too short
+    }
+
+    #[test]
+    fn test_exactly_min_sequence_length() {
+        let model = HumanModel::default();
+        // Create exactly min_sequence_length varied values
+        let jitters: Vec<Jitter> = (0..model.min_sequence_length)
+            .map(|i| 500 + ((i * 123) % 2500) as u32)
+            .collect();
+        let result = model.validate(&jitters);
+        assert!(result.confidence > 0.0);
     }
 }

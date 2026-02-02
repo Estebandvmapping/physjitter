@@ -1,8 +1,10 @@
 [package]
 name = "physjitter"
-version = "0.1.0"
+version = "0.1.8"
 edition = "2021"
-license = "MIT OR Apache-2.0"
+rust-version = "1.70.0"
+authors = ["David Condrey <david@writerslogic.com>"]
+license = "Apache-2.0"
 description = "Proof-of-process primitive using timing jitter for human authorship verification"
 repository = "https://github.com/writerslogic/physjitter"
 keywords = ["cryptography", "authentication", "timing", "entropy", "authorship"]
@@ -15,7 +17,11 @@ sha2 = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "2.0"
+getrandom = "0.3"
+zeroize = { version = "1.8", features = ["derive"] }
+subtle = "2.5"
 rand = { version = "0.8", optional = true }
+hkdf = "0.12.4"
 
 [dev-dependencies]
 rand = "0.8"

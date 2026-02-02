@@ -56,6 +56,8 @@
 //! Combines both models: uses physics when available, falls back to pure jitter
 //! in virtualized environments. Evidence records which mode was used.
 
+use zeroize::Zeroizing;
+
 pub mod evidence;
 pub mod model;
 pub mod phys;
@@ -69,8 +71,23 @@ pub use phys::PhysJitter;
 pub use pure::PureJitter;
 pub use traits::{EntropySource, JitterEngine};
 
-/// Hash output type (SHA-256).
-pub type PhysHash = [u8; 32];
+/// Hash output with associated entropy metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct PhysHash {
+    /// SHA-256 hash of the entropy samples and inputs.
+    pub hash: [u8; 32],
+    /// Estimated entropy bits in the samples.
+    pub entropy_bits: u8,
+}
+
+impl From<[u8; 32]> for PhysHash {
+    fn from(hash: [u8; 32]) -> Self {
+        Self {
+            hash,
+            entropy_bits: 0,
+        }
+    }
+}
 
 /// Jitter delay in microseconds.
 pub type Jitter = u32;
@@ -145,13 +162,13 @@ where
     pub fn sample(&self, secret: &[u8; 32], inputs: &[u8]) -> Result<(Jitter, Evidence), Error> {
         // Try physics-based entropy first
         match self.phys.sample(inputs) {
-            Ok(entropy) if self.phys.validate(entropy) => {
+            Ok(entropy) if entropy.entropy_bits >= self.min_phys_entropy && self.phys.validate(entropy) => {
                 let jitter = self.phys.compute_jitter(secret, inputs, entropy);
                 Ok((jitter, Evidence::phys(entropy, jitter)))
             }
             Ok(_) | Err(_) => {
                 // Fall back to pure jitter
-                let jitter = self.fallback.compute_jitter(secret, inputs, [0u8; 32]);
+                let jitter = self.fallback.compute_jitter(secret, inputs, [0u8; 32].into());
                 Ok((jitter, Evidence::pure(jitter)))
             }
         }
@@ -166,8 +183,8 @@ where
 /// Session manager for tracking jitter evidence over a document editing session.
 #[derive(Debug)]
 pub struct Session {
-    /// Secret key for this session (should be memory-locked in production).
-    secret: [u8; 32],
+    /// Secret key for this session (zeroized on drop).
+    secret: Zeroizing<[u8; 32]>,
     /// Hybrid jitter engine.
     engine: HybridEngine,
     /// Accumulated evidence chain.
@@ -180,9 +197,9 @@ impl Session {
     /// Create a new session with the given secret.
     pub fn new(secret: [u8; 32]) -> Self {
         Self {
-            secret,
+            secret: Zeroizing::new(secret),
             engine: HybridEngine::default(),
-            evidence: EvidenceChain::new(),
+            evidence: EvidenceChain::with_secret(secret),
             model: HumanModel::default(),
         }
     }
@@ -283,11 +300,43 @@ mod tests {
         let engine = PureJitter::default();
         let secret = [99u8; 32];
         let inputs = b"deterministic test";
-        let entropy = [0u8; 32];
+        let entropy: PhysHash = [0u8; 32].into();
 
         let j1 = engine.compute_jitter(&secret, inputs, entropy);
         let j2 = engine.compute_jitter(&secret, inputs, entropy);
 
         assert_eq!(j1, j2, "Pure jitter should be deterministic");
+    }
+
+    #[test]
+    fn test_empty_inputs() {
+        let engine = HybridEngine::default();
+        let secret = [42u8; 32];
+
+        // Empty input should still work
+        let result = engine.sample(&secret, b"");
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_large_inputs() {
+        let engine = HybridEngine::default();
+        let secret = [42u8; 32];
+
+        // Large input should work
+        let large_input = vec![0u8; 10000];
+        let result = engine.sample(&secret, &large_input);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_min_phys_entropy_enforced() {
+        // Create engine with high entropy requirement that will likely fail
+        let engine = HybridEngine::default().with_min_entropy(255);
+        let secret = [42u8; 32];
+
+        // Should fall back to pure jitter since entropy requirement is impossibly high
+        let (_, evidence) = engine.sample(&secret, b"test").unwrap();
+        assert!(!evidence.is_phys(), "Should have fallen back to pure jitter");
     }
 }

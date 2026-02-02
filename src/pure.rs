@@ -33,8 +33,21 @@ impl Default for PureJitter {
 
 impl PureJitter {
     /// Create with custom parameters.
+    ///
+    /// # Panics
+    /// Panics if `range` is 0.
     pub fn new(jmin: u32, range: u32) -> Self {
+        assert!(range > 0, "range must be greater than 0");
         Self { jmin, range }
+    }
+
+    /// Create with custom parameters, returning None if invalid.
+    pub fn try_new(jmin: u32, range: u32) -> Option<Self> {
+        if range == 0 {
+            None
+        } else {
+            Some(Self { jmin, range })
+        }
     }
 }
 
@@ -42,6 +55,7 @@ impl JitterEngine for PureJitter {
     fn compute_jitter(&self, secret: &[u8; 32], inputs: &[u8], _entropy: PhysHash) -> Jitter {
         let mut mac = HmacSha256::new_from_slice(secret)
             .expect("HMAC accepts any key size");
+        mac.update(b"physjitter/v1/jitter"); // Domain separation
         mac.update(inputs);
         let result = mac.finalize().into_bytes();
 
@@ -60,7 +74,7 @@ mod tests {
         let engine = PureJitter::default();
         let secret = [0u8; 32];
         let inputs = b"hello world";
-        let entropy = [0u8; 32];
+        let entropy = PhysHash::from([0u8; 32]);
 
         let j1 = engine.compute_jitter(&secret, inputs, entropy);
         let j2 = engine.compute_jitter(&secret, inputs, entropy);
@@ -72,7 +86,7 @@ mod tests {
     fn test_jitter_range() {
         let engine = PureJitter::new(500, 2500);
         let secret = [42u8; 32];
-        let entropy = [0u8; 32];
+        let entropy = PhysHash::from([0u8; 32]);
 
         for i in 0..100 {
             let inputs = format!("test input {}", i);
@@ -86,12 +100,24 @@ mod tests {
     fn test_different_inputs_different_jitter() {
         let engine = PureJitter::default();
         let secret = [1u8; 32];
-        let entropy = [0u8; 32];
+        let entropy = PhysHash::from([0u8; 32]);
 
         let j1 = engine.compute_jitter(&secret, b"input a", entropy);
         let j2 = engine.compute_jitter(&secret, b"input b", entropy);
 
         // Statistically should be different (collision unlikely)
         assert_ne!(j1, j2);
+    }
+
+    #[test]
+    #[should_panic(expected = "range must be greater than 0")]
+    fn test_new_zero_range_panics() {
+        PureJitter::new(500, 0);
+    }
+
+    #[test]
+    fn test_try_new_zero_range() {
+        assert!(PureJitter::try_new(500, 0).is_none());
+        assert!(PureJitter::try_new(500, 100).is_some());
     }
 }
