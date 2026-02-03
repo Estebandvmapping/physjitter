@@ -75,6 +75,7 @@ In an era of AI-generated content, proving that text was actually *typed* by a h
 | **Human Validation** | Statistical model trained on 136M real keystrokes |
 | **Evidence Chain** | Cryptographically-linked, serializable proof records |
 | **Zero Unsafe Code** | Pure safe Rust implementation (`#![forbid(unsafe_code)]`) |
+| **`no_std` Support** | Works in embedded and WASM environments |
 | **SLSA Level 3** | Supply chain security with provenance attestation |
 | **Minimal Dependencies** | Only well-audited RustCrypto crates |
 | **Cross-Platform** | Linux, macOS, Windows, WebAssembly |
@@ -87,7 +88,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-physjitter = "0.1"
+physjitter = "0.2"
 ```
 
 Or install with cargo:
@@ -100,16 +101,16 @@ cargo add physjitter
 
 | Feature | Description | Default |
 |---------|-------------|---------|
-| `default` | Core functionality (pure jitter engine) | Yes |
+| `std` | Standard library support (Session, timing, JSON) | Yes |
 | `hardware` | Enable TSC/hardware entropy collection | No |
 | `rand` | Enable random secret generation | No |
 
 ```toml
 # Enable all features
-physjitter = { version = "0.1", features = ["hardware", "rand"] }
+physjitter = { version = "0.2", features = ["hardware", "rand"] }
 
-# Minimal (WebAssembly compatible)
-physjitter = { version = "0.1", default-features = false }
+# no_std (embedded/WASM compatible)
+physjitter = { version = "0.2", default-features = false }
 ```
 
 ### Platform Support
@@ -121,7 +122,8 @@ physjitter = { version = "0.1", default-features = false }
 | macOS x86_64 | Yes | Yes | Full support |
 | macOS aarch64 | Yes | Yes | Full support (Apple Silicon) |
 | Windows x86_64 | Yes | Yes | Full support |
-| WebAssembly | Yes | No | Pure jitter only |
+| WebAssembly | Yes | No | Pure jitter only (`no_std`) |
+| Embedded (`no_std`) | Yes | No | Core functionality only |
 | Docker/VMs | Yes | Varies | May fall back to pure jitter |
 
 ---

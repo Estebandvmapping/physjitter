@@ -7,6 +7,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-03
+
+### Added
+- **`no_std` support** - Core functionality now works in embedded and WASM environments
+  - `std` feature flag controls standard library dependency (enabled by default)
+  - Uses `libm` for math operations in `no_std` mode
+  - `alloc` crate used for heap allocations when `std` is disabled
+- **Sequence numbers for evidence chain integrity**
+  - `Evidence` variants now include monotonic sequence numbers
+  - `EvidenceChain::validate_sequences()` - Verify sequence continuity
+  - `EvidenceChain::validate_timestamps()` - Verify timestamp ordering
+  - Sequence numbers included in MAC computation for tamper detection
+- **Fuzzing infrastructure** - Four fuzz targets for security testing
+  - `fuzz_jitter_compute` - Jitter computation with arbitrary inputs
+  - `fuzz_evidence_json` - JSON deserialization fuzzing
+  - `fuzz_evidence_verify` - Evidence verification fuzzing
+  - `fuzz_human_model` - Human validation model fuzzing
+- **Benchmarks** - Criterion benchmarks for performance testing
+  - `jitter_computation`, `entropy_sampling`, `evidence_chain`, `human_validation`, `session_workflow`
+- **Examples** - Three practical usage examples
+  - `basic_session.rs` - Basic session usage
+  - `custom_engine.rs` - Custom engine configuration
+  - `verify_evidence.rs` - Evidence chain verification
+- `Session::with_engine()` - Constructor for custom engine configuration
+- `derive_session_secret()` - HKDF-based key derivation helper
+
+### Changed
+- Feature flags reorganized for `no_std` compatibility
+- `serde_json` and `thiserror` now require `std` feature
+- Hardware entropy collection requires `std` feature
+- Math operations use platform-independent implementations
+
+### Security
+- **Timestamp manipulation prevention** - Sequence numbers prevent replay and reordering attacks
+- **Comprehensive fuzzing** - Automated testing for edge cases and malformed inputs
+
 ## [0.1.8] - 2026-02-01
 
 ### Changed
@@ -196,6 +232,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 | Version | Date | Highlights |
 |---------|------|------------|
+| 0.2.0 | 2026-02-03 | no_std support, security hardening, fuzzing |
 | 0.1.8 | 2026-02-01 | Semgrep with token auth |
 | 0.1.7 | 2026-02-01 | Apache-2.0 license, simplified CI |
 | 0.1.6 | 2026-02-01 | Add rust-version (MSRV) |
@@ -209,6 +246,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ---
 
 ## Upgrade Guide
+
+### Upgrading from 0.1.x to 0.2.x
+
+**No breaking API changes.** The 0.2.0 release adds new features without breaking existing code:
+
+- `Evidence` variants now include a `sequence` field (backward compatible for deserialization)
+- New `validate_timestamps()` and `validate_sequences()` methods on `EvidenceChain`
+- New `Session::with_engine()` constructor
+- New `derive_session_secret()` helper function
+
+**Feature flag changes:**
+- `std` is now an explicit feature (enabled by default)
+- To use `no_std`, set `default-features = false`
 
 ### Upgrading to 0.1.x
 
@@ -239,5 +289,6 @@ slsa-verifier verify-artifact physjitter-<version>.crate \
 - [crates.io](https://crates.io/crates/physjitter)
 - [Documentation](https://docs.rs/physjitter)
 
-[Unreleased]: https://github.com/writerslogic/physjitter/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/writerslogic/physjitter/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/writerslogic/physjitter/releases/tag/v0.2.0
 [0.1.0]: https://github.com/writerslogic/physjitter/releases/tag/v0.1.0
